@@ -3,24 +3,25 @@ const Activity = require("../models/Activity");
 
 // Correct Climatiq URL (only this works)
 const CLIMATIQ_API_KEY = process.env.CLIMATIQ_API_KEY;
-const CLIMATIQ_API_URL = "https://beta3.api.climatiq.io/estimate";
+const CLIMATIQ_API_URL = 'https://api.climatiq.io/data/v1/estimate';
 
 /**
  * COMMUTE EMISSIONS
  */
 const calculateCommuteEmissions = async (distance, transportMode) => {
-  try {
-    // Correct Climatiq activity IDs - using standard format
-    const emissionFactors = {
-      car: "passenger_ferry-route_type_car_passenger-fuel_source_na",
-      bus: "passenger_vehicle-vehicle_type_local_bus-fuel_source_na-distance_na-engine_size_na",
-      train: "passenger_train-route_type_light_rail_and_tram-fuel_source_na",
-      plane: "passenger_vehicle-vehicle_type_aircraft-fuel_source_na-distance_na",
-      motorcycle: "passenger_vehicle-vehicle_type_upper_medium_car-fuel_source_na-engine_size_na-vehicle_age_na-vehicle_weight_na",
-      bicycle: null,
-      walking: null,
-    };
+  // define emissionFactors at function scope so the catch block can reference it
+  const emissionFactors = {
+    car: "passenger_ferry-route_type_car_passenger-fuel_source_na",
+    bus: "passenger_vehicle-vehicle_type_local_bus-fuel_source_na-distance_na-engine_size_na",
+    train: "passenger_train-route_type_light_rail_and_tram-fuel_source_na",
+    plane: "passenger_vehicle-vehicle_type_aircraft-fuel_source_na-distance_na",
+    motorcycle: "passenger_vehicle-vehicle_type_upper_medium_car-fuel_source_na-engine_size_na-vehicle_age_na-vehicle_weight_na",
+    bicycle: null,
+    walking: null,
+  };
 
+  try {
+    // Use the emissionFactors already defined above
     const factor = emissionFactors[transportMode] || emissionFactors.car;
 
     // bicycle/walking → zero emissions

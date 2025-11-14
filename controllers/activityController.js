@@ -28,9 +28,10 @@ const createActivity = async (req, res) => {
 
     let co2e = 0;
 
-    // 🔥 FIXED VALIDATION (distance == null allows "0")
+    // Normalize and validate inputs per activity type
     switch (activityType) {
-      case 'commute':
+      case 'commute': {
+        // allow 0 but not null/undefined
         if (distance == null) {
           return res.status(400).json({ error: 'Distance is required for commute' });
         }
@@ -38,13 +39,17 @@ const createActivity = async (req, res) => {
         if (isNaN(distanceNum) || distanceNum < 0) {
           return res.status(400).json({ error: 'Distance must be a non-negative number' });
         }
-        co2e = await emissionController.calculateCommuteEmissions(
-          distance,
-          transportMode || 'car'
-        );
-        break;
 
-      case 'food':
+        const mode = transportMode || 'car';
+        co2e = await emissionController.calculateCommuteEmissions(distanceNum, mode);
+
+        // Save numeric value back for DB
+        req.body.distance = distanceNum;
+        req.body.transportMode = mode;
+        break;
+      }
+
+      case 'food': {
         if (quantity == null) {
           return res.status(400).json({ error: 'Quantity is required for food activity' });
         }
@@ -52,14 +57,18 @@ const createActivity = async (req, res) => {
         if (isNaN(quantityNum) || quantityNum < 0) {
           return res.status(400).json({ error: 'Quantity must be a non-negative number' });
         }
-        co2e = await emissionController.calculateFoodEmissions(
-          foodType || 'vegetables',
-          quantity,
-          unit || 'kg'
-        );
-        break;
 
-      case 'electricity':
+        const fType = foodType || 'vegetables';
+        const u = unit || 'kg';
+        co2e = await emissionController.calculateFoodEmissions(fType, quantityNum, u);
+
+        req.body.quantity = quantityNum;
+        req.body.foodType = fType;
+        req.body.unit = u;
+        break;
+      }
+
+      case 'electricity': {
         if (energyConsumed == null) {
           return res.status(400).json({ error: 'Energy consumed is required for electricity' });
         }
@@ -67,24 +76,27 @@ const createActivity = async (req, res) => {
         if (isNaN(energyNum) || energyNum < 0) {
           return res.status(400).json({ error: 'Energy consumed must be a non-negative number' });
         }
-        co2e = await emissionController.calculateElectricityEmissions(
-          energyConsumed,
-          energyUnit || 'kwh'
-        );
+
+        const eUnit = energyUnit || 'kwh';
+        co2e = await emissionController.calculateElectricityEmissions(energyNum, eUnit);
+
+        req.body.energyConsumed = energyNum;
+        req.body.energyUnit = eUnit;
         break;
+      }
     }
 
-    // Save activity in DB
+    // Save activity in DB with normalized values
     const activity = new Activity({
       userId,
       activityType,
-      distance,
-      transportMode,
-      foodType,
-      quantity,
-      unit,
-      energyConsumed,
-      energyUnit,
+      distance: req.body.distance,
+      transportMode: req.body.transportMode,
+      foodType: req.body.foodType,
+      quantity: req.body.quantity,
+      unit: req.body.unit,
+      energyConsumed: req.body.energyConsumed,
+      energyUnit: req.body.energyUnit,
       co2e,
       date: date ? new Date(date) : new Date(),
       notes
@@ -215,7 +227,7 @@ const getActivityById = async (req, res) => {
 const updateActivity = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = { ...req.body };
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: 'Invalid activity ID format' });
@@ -226,8 +238,14 @@ const updateActivity = async (req, res) => {
       return res.status(404).json({ error: 'Activity not found' });
     }
 
-    // Recalculate emissions only if needed
-    if (
+    // If activityType is provided, validate it
+    if (updateData.activityType && !['commute', 'food', 'electricity'].includes(updateData.activityType)) {
+      return res.status(400).json({ error: 'Invalid activity type' });
+    }
+
+    // Determine whether we need to recalculate emissions
+    const willChangeType = !!updateData.activityType && updateData.activityType !== activity.activityType;
+    const willChangeRelevantField = (
       updateData.distance != null ||
       updateData.transportMode ||
       updateData.foodType ||
@@ -235,32 +253,53 @@ const updateActivity = async (req, res) => {
       updateData.unit ||
       updateData.energyConsumed != null ||
       updateData.energyUnit
-    ) {
+    );
+
+    if (willChangeType || willChangeRelevantField) {
       const type = updateData.activityType || activity.activityType;
       let co2e = 0;
 
       switch (type) {
-        case 'commute':
-          co2e = await emissionController.calculateCommuteEmissions(
-            updateData.distance ?? activity.distance,
-            updateData.transportMode || activity.transportMode
-          );
-          break;
+        case 'commute': {
+          const newDistance = updateData.distance != null ? Number(updateData.distance) : Number(activity.distance);
+          if (isNaN(newDistance) || newDistance < 0) {
+            return res.status(400).json({ error: 'Distance must be a non-negative number' });
+          }
+          const mode = updateData.transportMode || activity.transportMode || 'car';
+          co2e = await emissionController.calculateCommuteEmissions(newDistance, mode);
 
-        case 'food':
-          co2e = await emissionController.calculateFoodEmissions(
-            updateData.foodType || activity.foodType,
-            updateData.quantity ?? activity.quantity,
-            updateData.unit || activity.unit
-          );
+          updateData.distance = newDistance;
+          updateData.transportMode = mode;
           break;
+        }
 
-        case 'electricity':
-          co2e = await emissionController.calculateElectricityEmissions(
-            updateData.energyConsumed ?? activity.energyConsumed,
-            updateData.energyUnit || activity.energyUnit
-          );
+        case 'food': {
+          const newQuantity = updateData.quantity != null ? Number(updateData.quantity) : Number(activity.quantity);
+          if (isNaN(newQuantity) || newQuantity < 0) {
+            return res.status(400).json({ error: 'Quantity must be a non-negative number' });
+          }
+          const fType = updateData.foodType || activity.foodType || 'vegetables';
+          const u = updateData.unit || activity.unit || 'kg';
+          co2e = await emissionController.calculateFoodEmissions(fType, newQuantity, u);
+
+          updateData.quantity = newQuantity;
+          updateData.foodType = fType;
+          updateData.unit = u;
           break;
+        }
+
+        case 'electricity': {
+          const newEnergy = updateData.energyConsumed != null ? Number(updateData.energyConsumed) : Number(activity.energyConsumed);
+          if (isNaN(newEnergy) || newEnergy < 0) {
+            return res.status(400).json({ error: 'Energy consumed must be a non-negative number' });
+          }
+          const eUnit = updateData.energyUnit || activity.energyUnit || 'kwh';
+          co2e = await emissionController.calculateElectricityEmissions(newEnergy, eUnit);
+
+          updateData.energyConsumed = newEnergy;
+          updateData.energyUnit = eUnit;
+          break;
+        }
       }
 
       updateData.co2e = co2e;
